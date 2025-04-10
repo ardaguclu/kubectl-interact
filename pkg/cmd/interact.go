@@ -2,12 +2,13 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/ardaguclu/kubectl-interact/pkg/ollama"
-
 	"github.com/spf13/cobra"
+	"strings"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
+
+	"github.com/ardaguclu/kubectl-interact/pkg/llm"
 )
 
 var (
@@ -28,7 +29,8 @@ var (
 type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 
-	port int
+	port  int
+	model string
 
 	genericiooptions.IOStreams
 }
@@ -38,6 +40,7 @@ func NewInteractOptions(streams genericiooptions.IOStreams) *InteractOptions {
 	return &InteractOptions{
 		configFlags: genericclioptions.NewConfigFlags(true),
 		port:        11434,
+		model:       "llama3.2",
 		IOStreams:   streams,
 	}
 }
@@ -55,13 +58,13 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 			cobra.CommandDisplayNameAnnotation: "kubectl interact",
 		},
 		RunE: func(c *cobra.Command, args []string) error {
-			if err := o.Complete(c, args); err != nil {
+			if err := o.Complete(); err != nil {
 				return err
 			}
 			if err := o.Validate(); err != nil {
 				return err
 			}
-			if err := o.Run(c); err != nil {
+			if err := o.Run(args); err != nil {
 				return err
 			}
 
@@ -71,11 +74,12 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 
 	o.configFlags.AddFlags(cmd.Flags())
 	cmd.Flags().IntVar(&o.port, "port", o.port, "Defaults to 11434 as it is Ollama's default port number")
+	cmd.Flags().StringVar(&o.model, "model", o.model, "The model is used in Ollama")
 	return cmd
 }
 
 // Complete sets all information required for updating the current context
-func (o *InteractOptions) Complete(cmd *cobra.Command, args []string) error {
+func (o *InteractOptions) Complete() error {
 	/*config*/ _, err := o.configFlags.ToRESTConfig()
 	if err != nil {
 		return err
@@ -91,12 +95,15 @@ func (o *InteractOptions) Validate() error {
 
 // Run lists all available namespaces on a user's KUBECONFIG or updates the
 // current context based on a provided namespace.
-func (o *InteractOptions) Run(c *cobra.Command) error {
-	model := "gemma2:2b"
-	err := ollama.Pull(o.port, model, o.IOStreams)
+func (o *InteractOptions) Run(args []string) error {
+	err := llm.GenerateOllama(o.model, strings.Join(args, " "), o.port)
 	if err != nil {
 		return err
 	}
-
-	return ollama.Chat(model, o.IOStreams)
+	//ctx := context.Background()
+	/*err := o.llm.Generate(ctx, strings.Join(args, " "))
+	if err != nil {
+		return err
+	}*/
+	return nil
 }
