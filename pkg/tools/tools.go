@@ -1,7 +1,12 @@
 package tools
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
+	"strings"
+	"unicode"
 
 	"github.com/spf13/pflag"
 
@@ -62,9 +67,6 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 	var tools []ToolCall
 	kubectl := cmd.NewDefaultKubectlCommand()
 	for _, cmd := range kubectl.Commands() {
-		if !allowedCmdList(cmd.Name()) {
-			continue
-		}
 		tool := ToolCall{
 			Type: "function",
 			Function: ToolFunction{
@@ -89,36 +91,45 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 	return tools
 }
 
-func allowedCmdList(cmdName string) bool {
-	allowedCmds := []string{
-		"annotate",
-		"auth",
-		"certificate",
-		"cluster-info",
-		"cp",
-		"create",
-		"describe",
-		"diff",
-		"drain",
-		"events",
-		"explain",
-		"expose",
-		"get",
-		"label",
-		"logs",
-		"proxy",
-		"run",
-		"scale",
-		"set",
-		"taint",
-		"top",
-		"uncordon",
-		"version",
-	}
-	for _, val := range allowedCmds {
-		if val == cmdName {
-			return true
+func ExecuteCommand(scanner *bufio.Scanner, t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
+	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl__", "")
+	params := make(map[string]map[string]string)
+	json.Unmarshal([]byte(t.Function.Arguments), &params)
+	arguments := params["arguments"]
+	var args []string
+	for key, val := range arguments {
+		if isAllUpper(key) {
+			args = append(args, val)
+		} else {
+			args = append(args, fmt.Sprintf("--%s=%s", key, val))
 		}
 	}
-	return false
+	kubectl := cmd.NewDefaultKubectlCommand()
+	for _, cmd := range kubectl.Commands() {
+		if cmd.Name() != cmdName {
+			continue
+		}
+
+		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s", cmd.Name(), strings.Join(args, " ")))
+		if scanner.Scan() {
+			if scanner.Text() == "" {
+				// TODO: Execute inner cmd instead of kubectl
+				kubectl.Run(cmd, args)
+			}
+		}
+	}
+	return "", nil
+}
+
+func isAllUpper(s string) bool {
+	hasLetter := false
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+			if !unicode.IsUpper(r) {
+				return false
+			}
+		}
+	}
+	return hasLetter
 }

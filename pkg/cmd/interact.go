@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"k8s.io/kubectl/pkg/cmd/util"
 	"net/http"
 	"os"
 	"strings"
@@ -34,6 +35,7 @@ const (
 
 type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
+	f           util.Factory
 
 	modelAPI string
 	modelID  string
@@ -90,11 +92,7 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 }
 
 func (o *InteractOptions) Complete() error {
-	/*config*/ _, err := o.configFlags.ToRESTConfig()
-	if err != nil {
-		return err
-	}
-
+	o.f = util.NewFactory(o.configFlags)
 	return nil
 }
 
@@ -122,6 +120,7 @@ func (o *InteractOptions) Generate() error {
 	var messages []tools.Message
 
 	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")
+	fmt.Println("If you don't want to execute the generated command, just press ESC")
 	fmt.Println("========================================")
 
 	scanner := bufio.NewScanner(o.In)
@@ -210,10 +209,16 @@ Use the following function calls as required.
 		messages = append(messages, assistantMessage)
 
 		for _, toolCall := range assistantMessage.ToolCallResponses {
-			fmt.Println(toolCall)
+			if cmd, err := tools.ExecuteCommand(scanner, toolCall, o.IOStreams); err != nil {
+				fmt.Fprintf(o.ErrOut, "\nError executing command: %v\n", err)
+				break
+			} else if cmd != "" {
+				messages = append(messages, tools.Message{
+					Role:    "user",
+					Content: cmd,
+				})
+			}
 		}
-
-		fmt.Fprintf(o.Out, "\nAssistant: %s\n", assistantMessage.Content)
 	}
 	return nil
 }
