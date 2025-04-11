@@ -120,7 +120,6 @@ func (o *InteractOptions) Generate() error {
 	var messages []tools.Message
 
 	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")
-	fmt.Println("If you don't want to execute the generated command, just press ESC")
 	fmt.Println("========================================")
 
 	scanner := bufio.NewScanner(o.In)
