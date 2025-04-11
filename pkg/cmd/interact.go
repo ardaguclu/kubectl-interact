@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"k8s.io/kubectl/pkg/cmd/util"
 	"net/http"
 	"os"
 	"strings"
@@ -18,6 +17,7 @@ import (
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
+	"k8s.io/kubectl/pkg/cmd/util"
 
 	"github.com/ardaguclu/kubectl-interact/pkg/tools"
 )

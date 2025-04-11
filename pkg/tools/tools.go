@@ -117,7 +117,6 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		}
 
 		if strings.EqualFold(input, "y") {
-			// TODO: Execute inner cmd instead of kubectl
 			cmd.Run(cmd, args)
 		}
 	}
