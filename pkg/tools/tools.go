@@ -74,8 +74,8 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 				Parameters:  make(map[string]interface{}),
 			},
 		}
-		flags := cmd.Flags()
-		flags.Visit(func(flag *pflag.Flag) {
+		flags := cmd.InheritedFlags()
+		flags.VisitAll(func(flag *pflag.Flag) {
 			tool.Function.Parameters[flag.Name] = struct {
 				Type        string `json:"type"`
 				Description string `json:"description"`
@@ -108,6 +108,7 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		if cmd.Name() != cmdName {
 			continue
 		}
+		cmd.InheritedFlags()
 
 		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s (Do you want to execute, y/n):", cmd.Name(), strings.Join(args, " ")))
 		var input string
