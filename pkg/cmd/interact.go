@@ -219,6 +219,9 @@ Use the following function calls as required.
 				})
 			}
 		}
+		if assistantMessage.Content != "" {
+			fmt.Fprintf(o.Out, "Assistant: %s\n", assistantMessage.Content)
+		}
 	}
 	return nil
 }
