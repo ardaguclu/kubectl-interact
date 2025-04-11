@@ -110,9 +110,9 @@ func (o *InteractOptions) Run() error {
 
 func (o *InteractOptions) Generate() error {
 	fmt.Fprintf(o.Out, "model-api: %s\n", o.modelAPI)
-	fmt.Fprintf(o.Out, "model-id: %s\n", o.apiKey)
+	fmt.Fprintf(o.Out, "model-id: %s\n", o.modelID)
 
-	if o.modelAPI == "" || o.apiKey == "" || o.modelID == "" {
+	if o.modelAPI == "" || o.modelID == "" {
 		return fmt.Errorf("please provide a valid api or model")
 	}
 
