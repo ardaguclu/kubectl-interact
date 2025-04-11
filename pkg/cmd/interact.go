@@ -2,13 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/ardaguclu/kubectl-interact/pkg/llm"
 	"github.com/spf13/cobra"
-	"strings"
-
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
-
-	"github.com/ardaguclu/kubectl-interact/pkg/llm"
+	"os"
 )
 
 var (
@@ -29,8 +27,10 @@ var (
 type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 
-	port  int
-	model string
+	modelAPI string
+	modelID  string
+	apiKey   string
+	caCert   string
 
 	genericiooptions.IOStreams
 }
@@ -39,8 +39,9 @@ type InteractOptions struct {
 func NewInteractOptions(streams genericiooptions.IOStreams) *InteractOptions {
 	return &InteractOptions{
 		configFlags: genericclioptions.NewConfigFlags(true),
-		port:        11434,
-		model:       "llama3.2",
+		modelAPI:    os.Getenv("MODEL_API"),
+		modelID:     os.Getenv("MODEL_ID"),
+		apiKey:      os.Getenv("MODEL_API_KEY"),
 		IOStreams:   streams,
 	}
 }
@@ -64,7 +65,7 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 			if err := o.Validate(); err != nil {
 				return err
 			}
-			if err := o.Run(args); err != nil {
+			if err := o.Run(); err != nil {
 				return err
 			}
 
@@ -73,8 +74,10 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 	}
 
 	o.configFlags.AddFlags(cmd.Flags())
-	cmd.Flags().IntVar(&o.port, "port", o.port, "Defaults to 11434 as it is Ollama's default port number")
-	cmd.Flags().StringVar(&o.model, "model", o.model, "The model is used in Ollama")
+	cmd.Flags().StringVar(&o.modelAPI, "model-api", o.modelAPI, "URL of the model API")
+	cmd.Flags().StringVar(&o.modelID, "model-id", o.modelID, "ID of the model")
+	cmd.Flags().StringVar(&o.apiKey, "api-key", o.apiKey, "API Key of the model API")
+	cmd.Flags().StringVar(&o.caCert, "ca-cert", o.caCert, "CA Cert path for the model API")
 	return cmd
 }
 
@@ -95,15 +98,10 @@ func (o *InteractOptions) Validate() error {
 
 // Run lists all available namespaces on a user's KUBECONFIG or updates the
 // current context based on a provided namespace.
-func (o *InteractOptions) Run(args []string) error {
-	err := llm.GenerateOllama(o.model, strings.Join(args, " "), o.port)
+func (o *InteractOptions) Run() error {
+	err := llm.Generate(o.modelAPI, o.apiKey, o.modelID, o.caCert, o.IOStreams)
 	if err != nil {
 		return err
 	}
-	//ctx := context.Background()
-	/*err := o.llm.Generate(ctx, strings.Join(args, " "))
-	if err != nil {
-		return err
-	}*/
 	return nil
 }

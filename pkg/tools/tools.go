@@ -2,46 +2,95 @@ package tools
 
 import (
 	"fmt"
-	"github.com/ollama/ollama/api"
+
+	"github.com/spf13/pflag"
+
 	"k8s.io/kubectl/pkg/cmd"
 )
 
-func GenerateKubectlCommandsAsTool() []api.Tool {
-	var tools []api.Tool
+type ToolCall struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+type ToolCallResponse struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function ToolCallResponseDetail `json:"function"`
+}
+
+type ToolCallResponseDetail struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+func GenerateKubectlCommandsAsTool() []ToolCall {
+	var tools []ToolCall
 	kubectl := cmd.NewDefaultKubectlCommand()
-	for _, command := range kubectl.Commands() {
-		tool := api.Tool{
+	for _, cmd := range kubectl.Commands() {
+		if !allowedCmdList(cmd.Name()) {
+			continue
+		}
+		tool := ToolCall{
 			Type: "function",
-			Function: api.ToolFunction{
-				Name:        fmt.Sprintf("kubectl_%s", command.Name()),
-				Description: fmt.Sprintf("%s\n%s\n%s\n", command.Long, command.Short, command.Example),
+			Function: ToolFunction{
+				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
+				Description: fmt.Sprintf("%s\n%s\n%s\n%s\n", cmd.Short, cmd.Use, cmd.Short, cmd.Example),
+				Parameters:  make(map[string]interface{}),
 			},
 		}
+		flags := cmd.Flags()
+		flags.Visit(func(flag *pflag.Flag) {
+			tool.Function.Parameters[flag.Name] = struct {
+				Type        string `json:"type"`
+				Description string `json:"description"`
+			}{
+				Type:        flag.Value.Type(),
+				Description: flag.Usage,
+			}
+		})
+
 		tools = append(tools, tool)
 	}
 	return tools
+}
 
-	/*return []llms.Tool{
-		{
-			Type: "function",
-			Function: &llms.FunctionDefinition{
-				Name:        "getCurrentWeather",
-				Description: "Get the current weather in a given location",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"location": map[string]any{
-							"type":        "string",
-							"description": "The city and state, e.g. San Francisco, CA",
-						},
-						"unit": map[string]any{
-							"type": "string",
-							"enum": []string{"fahrenheit", "celsius"},
-						},
-					},
-					"required": []string{"location"},
-				},
-			},
-		},
-	}*/
+func allowedCmdList(cmdName string) bool {
+	allowedCmds := []string{
+		"annotate",
+		"auth",
+		"certificate",
+		"cluster-info",
+		"cp",
+		"create",
+		"describe",
+		"diff",
+		"drain",
+		"events",
+		"explain",
+		"expose",
+		"get",
+		"label",
+		"logs",
+		"proxy",
+		"run",
+		"scale",
+		"set",
+		"taint",
+		"top",
+		"uncordon",
+		"version",
+	}
+	for _, val := range allowedCmds {
+		if val == cmdName {
+			return true
+		}
+	}
+	return false
 }
