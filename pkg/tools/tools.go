@@ -74,7 +74,7 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 				Parameters:  make(map[string]interface{}),
 			},
 		}
-		flags := cmd.InheritedFlags()
+		flags := cmd.Flags()
 		flags.VisitAll(func(flag *pflag.Flag) {
 			tool.Function.Parameters[flag.Name] = struct {
 				Type        string `json:"type"`
