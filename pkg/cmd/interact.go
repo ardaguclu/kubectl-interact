@@ -209,7 +209,7 @@ Use the following function calls as required.
 		messages = append(messages, assistantMessage)
 
 		for _, toolCall := range assistantMessage.ToolCallResponses {
-			if cmd, err := tools.ExecuteCommand(scanner, toolCall, o.IOStreams); err != nil {
+			if cmd, err := tools.ExecuteCommand(toolCall, o.IOStreams); err != nil {
 				fmt.Fprintf(o.ErrOut, "\nError executing command: %v\n", err)
 				break
 			} else if cmd != "" {

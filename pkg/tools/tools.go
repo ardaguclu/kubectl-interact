@@ -1,15 +1,14 @@
 package tools
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"strings"
 	"unicode"
 
 	"github.com/spf13/pflag"
 
+	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/kubectl/pkg/cmd"
 )
 
@@ -91,7 +90,7 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 	return tools
 }
 
-func ExecuteCommand(scanner *bufio.Scanner, t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
+func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
 	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl__", "")
 	params := make(map[string]map[string]string)
 	json.Unmarshal([]byte(t.Function.Arguments), &params)
@@ -110,12 +109,16 @@ func ExecuteCommand(scanner *bufio.Scanner, t ToolCallResponse, streams generici
 			continue
 		}
 
-		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s", cmd.Name(), strings.Join(args, " ")))
-		if scanner.Scan() {
-			if scanner.Text() == "" {
-				// TODO: Execute inner cmd instead of kubectl
-				kubectl.Run(cmd, args)
-			}
+		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s (Do you want to execute, y/n):", cmd.Name(), strings.Join(args, " ")))
+		var input string
+		_, err := fmt.Fscan(streams.In, &input)
+		if err != nil {
+			return "", err
+		}
+
+		if strings.EqualFold(input, "y") {
+			// TODO: Execute inner cmd instead of kubectl
+			kubectl.Run(cmd, args)
 		}
 	}
 	return "", nil
