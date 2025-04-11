@@ -1,29 +1,37 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"fmt"
-	"github.com/ardaguclu/kubectl-interact/pkg/llm"
+	"io"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
 	"github.com/spf13/cobra"
+
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
-	"os"
+
+	"github.com/ardaguclu/kubectl-interact/pkg/tools"
 )
 
 var (
-	namespaceExample = `
-	# view the current namespace in your KUBECONFIG
-	%[1]s ns
-
-	# view all of the namespaces in use by contexts in your KUBECONFIG
-	%[1]s ns --list
-
-	# switch your current-context to one that contains the desired namespace
-	%[1]s ns foo
+	interactExample = `
+	# Run predefined kubectl commands via given LLM model
+	%[1]s interact
 `
 )
 
-// InteractOptions provides information required to update
-// the current context on a user's KUBECONFIG
+const (
+	completionEndpoint = "/v1/chat/completions"
+)
+
 type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 
@@ -53,7 +61,7 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "interact",
 		Short:        "interact",
-		Example:      fmt.Sprintf(namespaceExample, "kubectl"),
+		Example:      fmt.Sprintf(interactExample, "kubectl"),
 		SilenceUsage: true,
 		Annotations: map[string]string{
 			cobra.CommandDisplayNameAnnotation: "kubectl interact",
@@ -81,7 +89,6 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 	return cmd
 }
 
-// Complete sets all information required for updating the current context
 func (o *InteractOptions) Complete() error {
 	/*config*/ _, err := o.configFlags.ToRESTConfig()
 	if err != nil {
@@ -91,17 +98,151 @@ func (o *InteractOptions) Complete() error {
 	return nil
 }
 
-// Validate ensures that all required arguments and flag values are provided
 func (o *InteractOptions) Validate() error {
 	return nil
 }
 
-// Run lists all available namespaces on a user's KUBECONFIG or updates the
-// current context based on a provided namespace.
 func (o *InteractOptions) Run() error {
-	err := llm.Generate(o.modelAPI, o.apiKey, o.modelID, o.caCert, o.IOStreams)
+	err := o.Generate()
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (o *InteractOptions) Generate() error {
+	fmt.Fprintf(o.Out, "model-api: %s\n", o.modelAPI)
+	fmt.Fprintf(o.Out, "model-id: %s\n", o.apiKey)
+
+	if o.modelAPI == "" || o.apiKey == "" || o.modelID == "" {
+		return fmt.Errorf("please provide a valid api or model")
+	}
+
+	url := strings.TrimRight(o.modelAPI, "/") + completionEndpoint
+	var messages []tools.Message
+
+	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")
+	fmt.Println("========================================")
+
+	scanner := bufio.NewScanner(o.In)
+	client, err := o.getClient()
+	if err != nil {
+		return err
+	}
+
+	for {
+		fmt.Print("\nYou: ")
+		if !scanner.Scan() {
+			break
+		}
+
+		userInput := strings.TrimSpace(scanner.Text())
+		if userInput == "exit" || userInput == "quit" {
+			break
+		}
+
+		messages = append(messages, tools.Message{
+			Role:    "user",
+			Content: userInput,
+		}, tools.Message{
+			Role: "system",
+			Content: `
+You are a helpful assistant with access to the following function calls. 
+Your task is to produce a list of function calls necessary to generate response to the user utterance.
+Use tools only if it is required. 
+Execute as many tools as required to find out correct answer.
+Use the following function calls as required.
+`,
+		})
+
+		chatRequest := tools.ChatRequest{
+			Model:       o.modelID,
+			Messages:    messages,
+			Temperature: 0,
+			Tools:       tools.GenerateKubectlCommandsAsTool(),
+		}
+
+		requestBody, err := json.Marshal(chatRequest)
+		if err != nil {
+			fmt.Fprintf(o.ErrOut, "\nError creating request: %v\n", err)
+			continue
+		}
+
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
+		if err != nil {
+			fmt.Fprintf(o.ErrOut, "\nError creating request: %v\n", err)
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+o.apiKey)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Fprintf(o.ErrOut, "\nError sending request: %v\n", err)
+			continue
+		}
+
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			fmt.Fprintf(o.ErrOut, "\nError reading response: %v\n", err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			fmt.Fprintf(o.ErrOut, "\nError: received status code %d: %s\n", resp.StatusCode, body)
+			continue
+		}
+
+		var chatResponse tools.ChatResponse
+		if err := json.Unmarshal(body, &chatResponse); err != nil {
+			fmt.Fprintf(o.ErrOut, "\nError parsing response: %v\n", err)
+			continue
+		}
+
+		if len(chatResponse.Choices) == 0 {
+			fmt.Fprintf(o.ErrOut, "\nError: No choices returned in response")
+			continue
+		}
+
+		assistantMessage := chatResponse.Choices[0].Message
+		messages = append(messages, assistantMessage)
+
+		for _, toolCall := range assistantMessage.ToolCallResponses {
+			fmt.Println(toolCall)
+		}
+
+		fmt.Fprintf(o.Out, "\nAssistant: %s\n", assistantMessage.Content)
+	}
+	return nil
+}
+
+func (o *InteractOptions) getClient() (*http.Client, error) {
+	transport := &http.Transport{}
+	if o.caCert != "" {
+		ca, err := os.ReadFile(o.caCert)
+		if err != nil {
+			return nil, fmt.Errorf("unable to read CA cert: %w", err)
+		}
+
+		caCertPool, err := x509.SystemCertPool()
+		if err != nil || caCertPool == nil {
+			caCertPool = x509.NewCertPool()
+		}
+		caCertPool.AppendCertsFromPEM(ca)
+
+		tlsConfig := &tls.Config{
+			RootCAs: caCertPool,
+		}
+
+		transport = &http.Transport{
+			TLSClientConfig: tlsConfig,
+		}
+	}
+
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}, nil
 }

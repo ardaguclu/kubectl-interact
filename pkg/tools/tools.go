@@ -8,6 +8,34 @@ import (
 	"k8s.io/kubectl/pkg/cmd"
 )
 
+type Message struct {
+	Role              string             `json:"role"`
+	Content           string             `json:"content"`
+	ToolCallResponses []ToolCallResponse `json:"tool_calls"`
+}
+
+type ChatRequest struct {
+	Model       string     `json:"model"`
+	Messages    []Message  `json:"messages"`
+	Temperature float64    `json:"temperature"`
+	Tools       []ToolCall `json:"tools"`
+}
+
+type MessageChoice struct {
+	Message Message `json:"message"`
+}
+
+type MessageUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+type ChatResponse struct {
+	Choices []MessageChoice `json:"choices"`
+	Usage   MessageUsage    `json:"usage"`
+}
+
 type ToolCall struct {
 	Type     string       `json:"type"`
 	Function ToolFunction `json:"function"`
