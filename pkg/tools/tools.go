@@ -70,13 +70,44 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 			Type: "function",
 			Function: ToolFunction{
 				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
-				Description: fmt.Sprintf("%s\n%s\n%s\n%s\n", cmd.Short, cmd.Use, cmd.Short, cmd.Example),
+				Description: fmt.Sprintf("%s\n%s\n", cmd.Short, cmd.Use),
 				Parameters:  make(map[string]interface{}),
 			},
 		}
 		flags := cmd.Flags()
 		flags.VisitAll(func(flag *pflag.Flag) {
 			tool.Function.Parameters[flag.Name] = struct {
+				Type        string `json:"type"`
+				Description string `json:"description"`
+			}{
+				Type:        flag.Value.Type(),
+				Description: flag.Usage,
+			}
+		})
+
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+func GenerateKubectlCommandsAsToolOllama() []ToolCall {
+	var tools []ToolCall
+	kubectl := cmd.NewDefaultKubectlCommand()
+	for _, cmd := range kubectl.Commands() {
+		tool := ToolCall{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
+				Description: fmt.Sprintf("%s\n%s\n", cmd.Short, cmd.Use),
+				Parameters:  make(map[string]interface{}),
+			},
+		}
+		tool.Function.Parameters = make(map[string]any)
+		tool.Function.Parameters["type"] = "object"
+		tool.Function.Parameters["properties"] = make(map[string]any)
+		flags := cmd.Flags()
+		flags.VisitAll(func(flag *pflag.Flag) {
+			tool.Function.Parameters["properties"].(map[string]any)[flag.Name] = struct {
 				Type        string `json:"type"`
 				Description string `json:"description"`
 			}{

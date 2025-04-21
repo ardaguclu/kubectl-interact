@@ -37,6 +37,7 @@ type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
 	f           util.Factory
 
+	ollama   bool
 	modelAPI string
 	modelID  string
 	apiKey   string
@@ -93,6 +94,10 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 
 func (o *InteractOptions) Complete() error {
 	o.f = util.NewFactory(o.configFlags)
+
+	if strings.Contains(o.modelAPI, "localhost") || strings.Contains(o.modelAPI, "127.0.0.1") {
+		o.ollama = true
+	}
 	return nil
 }
 
@@ -149,15 +154,19 @@ You are a helpful assistant with access to the following function calls.
 Your task is to produce a list of function calls necessary to generate response to the user utterance.
 Use tools only if it is required. 
 Execute as many tools as required to find out correct answer.
-Use the following function calls as required.
-`,
+Use the following function calls as required.`,
 		})
 
 		chatRequest := tools.ChatRequest{
 			Model:       o.modelID,
 			Messages:    messages,
 			Temperature: 0,
-			Tools:       tools.GenerateKubectlCommandsAsTool(),
+		}
+
+		if o.ollama {
+			chatRequest.Tools = tools.GenerateKubectlCommandsAsToolOllama()
+		} else {
+			chatRequest.Tools = tools.GenerateKubectlCommandsAsTool()
 		}
 
 		requestBody, err := json.Marshal(chatRequest)
@@ -249,7 +258,7 @@ func (o *InteractOptions) getClient() (*http.Client, error) {
 	}
 
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   time.Minute,
 		Transport: transport,
 	}, nil
 }
