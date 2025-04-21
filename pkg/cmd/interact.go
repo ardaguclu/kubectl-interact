@@ -30,7 +30,8 @@ var (
 )
 
 const (
-	completionEndpoint = "/v1/chat/completions"
+	completionEndpoint       = "/v1/chat/completions"
+	ollamaCompletionEndpoint = "/api/chat"
 )
 
 type InteractOptions struct {
@@ -121,7 +122,12 @@ func (o *InteractOptions) Generate() error {
 		return fmt.Errorf("please provide a valid api or model")
 	}
 
-	url := strings.TrimRight(o.modelAPI, "/") + completionEndpoint
+	url := strings.TrimRight(o.modelAPI, "/")
+	if o.ollama {
+		url = url + ollamaCompletionEndpoint
+	} else {
+		url = url + completionEndpoint
+	}
 	var messages []tools.Message
 
 	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")

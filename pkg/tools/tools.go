@@ -94,11 +94,14 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 	var tools []ToolCall
 	kubectl := cmd.NewDefaultKubectlCommand()
 	for _, cmd := range kubectl.Commands() {
+		if cmd.Name() != "get" {
+			continue
+		}
 		tool := ToolCall{
 			Type: "function",
 			Function: ToolFunction{
 				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
-				Description: fmt.Sprintf("%s\n%s\n", cmd.Short, cmd.Use),
+				Description: fmt.Sprintf("%s\n", cmd.Short),
 				Parameters:  make(map[string]interface{}),
 			},
 		}
@@ -123,7 +126,9 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 
 func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
 	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl__", "")
-	params := make(map[string]map[string]string)
+	fmt.Fprintf(streams.Out, "Command %s is called as tool with args %v", cmdName, t.Function.Arguments)
+	return "", nil
+	/*params := make(map[string]map[string]string)
 	json.Unmarshal([]byte(t.Function.Arguments), &params)
 	arguments := params["arguments"]
 	var args []string
@@ -152,7 +157,7 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 			cmd.Run(cmd, args)
 		}
 	}
-	return "", nil
+	return "", nil*/
 }
 
 func isAllUpper(s string) bool {
