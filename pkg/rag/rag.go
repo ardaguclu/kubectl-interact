@@ -3,6 +3,7 @@ package rag
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/spf13/cobra"
 	"math"
 	"net/http"
 	"sort"
@@ -15,19 +16,25 @@ import (
 
 const embeddingsEndpoint = "/v1/embeddings"
 
-func SearchCommands(client *http.Client, prompt string, url string, apiKey string, model string) ([]string, error) {
+func SearchCommands(client *http.Client, prompt string, url string, apiKey string, model string) (string, error) {
 	var vectorStore []VectorRecord
 	kubectl := cmd.NewDefaultKubectlCommand()
 	for _, c := range kubectl.Commands() {
-		chunks := chunkText(fmt.Sprintf("Long: %s Example: %s", c.Long, c.Example), 2048, 256)
+		if c.Example == "" {
+			continue
+		}
+		//chunks := chunkText(fmt.Sprintf("Example: %s", c.Example), 256, 256)
+		fmt.Printf("CMD: %s CHUNK SIZE: %d\n", c.Name(), len(c.Example))
+		chunks := []string{c.Example}
 		for _, chunk := range chunks {
 
 			embedding, err := getEmbeddingFromChunk(client, chunk, url, apiKey, model)
 			if err != nil {
-				return nil, err
+				return "", err
 			}
 
 			record := VectorRecord{
+				Command:   *c,
 				Prompt:    chunk,
 				Embedding: embedding,
 			}
@@ -37,18 +44,18 @@ func SearchCommands(client *http.Client, prompt string, url string, apiKey strin
 
 	embeddingFromQuestion, err := getEmbeddingFromChunk(client, prompt, url, apiKey, model)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	var similarities []Similarity
 	for _, vector := range vectorStore {
 		cosine, err := cosineSimilarity(embeddingFromQuestion, vector.Embedding)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
 
 		similarities = append(similarities, Similarity{
-			Prompt:           vector.Prompt,
+			Prompt:           vector.Command.Example,
 			CosineSimilarity: cosine,
 		})
 	}
@@ -57,27 +64,14 @@ func SearchCommands(client *http.Client, prompt string, url string, apiKey strin
 		return similarities[i].CosineSimilarity > similarities[j].CosineSimilarity
 	})
 
-	var result []string
-	top := similarities[:5]
-	for _, s := range top {
-		result = append(result, s.Prompt)
+	if len(similarities) == 0 {
+		return "", nil
 	}
-	return result, nil
-}
-
-func chunkText(text string, chunkSize, overlap int) []string {
-	chunks := []string{}
-	for start := 0; start < len(text); start += chunkSize - overlap {
-		end := start + chunkSize
-		if end > len(text) {
-			end = len(text)
-		}
-		chunks = append(chunks, text[start:end])
-	}
-	return chunks
+	return similarities[0].Prompt, nil
 }
 
 type VectorRecord struct {
+	Command   cobra.Command
 	Prompt    string    `json:"prompt"`
 	Embedding []float64 `json:"embedding"`
 }

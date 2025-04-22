@@ -40,6 +40,7 @@ type InteractOptions struct {
 	modelID  string
 	apiKey   string
 	caCert   string
+	useRAG   bool
 
 	genericiooptions.IOStreams
 }
@@ -87,6 +88,7 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.Flags().StringVar(&o.modelID, "model-id", o.modelID, "ID of the model")
 	cmd.Flags().StringVar(&o.apiKey, "api-key", o.apiKey, "API Key of the model API")
 	cmd.Flags().StringVar(&o.caCert, "ca-cert", o.caCert, "CA Cert path for the model API")
+	cmd.Flags().BoolVar(&o.useRAG, "use-rag", o.useRAG, "Enable this if your model supports embeddings")
 	return cmd
 }
 
@@ -146,12 +148,15 @@ func (o *InteractOptions) Generate() error {
 			break
 		}
 
-		commands, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
-		if err != nil {
-			fmt.Fprintf(o.ErrOut, "\nunexpected error during RAG search %v\n", err)
-			continue
+		if o.useRAG {
+			commands, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
+			if err != nil {
+				fmt.Fprintf(o.ErrOut, "\nunexpected error during RAG search %v\n", err)
+				continue
+			}
+			// TODO: embed this to the messages of system prompt
+			fmt.Fprintf(o.Out, "\ncommands: %v\n", commands)
 		}
-		fmt.Fprintf(o.Out, "\ncommands: %v\n", commands)
 
 		var messages []tools.Message
 		messages = append(messages, tools.Message{
