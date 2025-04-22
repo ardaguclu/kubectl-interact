@@ -3,9 +3,10 @@ package rag
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/spf13/cobra"
+	"k8s.io/client-go/util/homedir"
 	"math"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 
@@ -14,66 +15,56 @@ import (
 	iclient "github.com/ardaguclu/kubectl-interact/pkg/client"
 )
 
-const embeddingsEndpoint = "/v1/embeddings"
+const (
+	embeddingsEndpoint = "/v1/embeddings"
+)
+
+var (
+	embeddingsCacheDir = homedir.HomeDir() + "/.kubectl-interact/embeddings"
+)
 
 func SearchCommands(client *http.Client, prompt string, url string, apiKey string, model string) (string, error) {
-	var vectorStore []VectorRecord
+	embeddingFromQuestion, err := getEmbeddingFromChunk(client, prompt, "", url, apiKey, model, false)
+	if err != nil {
+		return "", err
+	}
+	var similarities []Similarity
 	kubectl := cmd.NewDefaultKubectlCommand()
 	for _, c := range kubectl.Commands() {
 		if c.Example == "" {
 			continue
 		}
-		//chunks := chunkText(fmt.Sprintf("Example: %s", c.Example), 256, 256)
-		fmt.Printf("CMD: %s CHUNK SIZE: %d\n", c.Name(), len(c.Example))
 		chunks := []string{c.Example}
 		for _, chunk := range chunks {
-
-			embedding, err := getEmbeddingFromChunk(client, chunk, url, apiKey, model)
+			embedding, err := getEmbeddingFromChunk(client, chunk, c.Name(), url, apiKey, model, true)
 			if err != nil {
 				return "", err
 			}
 
-			record := VectorRecord{
-				Command:   *c,
-				Prompt:    chunk,
-				Embedding: embedding,
+			cosine, err := cosineSimilarity(embeddingFromQuestion, embedding)
+			if err != nil {
+				return "", err
 			}
-			vectorStore = append(vectorStore, record)
+
+			bm25Score := calculateBM25Score(prompt, chunk) * 0.2
+
+			totalScore := (cosine * 0.8) + bm25Score
+
+			similarities = append(similarities, Similarity{
+				Prompt: chunk,
+				Score:  totalScore,
+			})
 		}
-	}
-
-	embeddingFromQuestion, err := getEmbeddingFromChunk(client, prompt, url, apiKey, model)
-	if err != nil {
-		return "", err
-	}
-
-	var similarities []Similarity
-	for _, vector := range vectorStore {
-		cosine, err := cosineSimilarity(embeddingFromQuestion, vector.Embedding)
-		if err != nil {
-			return "", err
-		}
-
-		similarities = append(similarities, Similarity{
-			Prompt:           vector.Command.Example,
-			CosineSimilarity: cosine,
-		})
 	}
 
 	sort.Slice(similarities, func(i, j int) bool {
-		return similarities[i].CosineSimilarity > similarities[j].CosineSimilarity
+		return similarities[i].Score > similarities[j].Score
 	})
 
 	if len(similarities) == 0 {
 		return "", nil
 	}
 	return similarities[0].Prompt, nil
-}
-
-type VectorRecord struct {
-	Command   cobra.Command
-	Prompt    string    `json:"prompt"`
-	Embedding []float64 `json:"embedding"`
 }
 
 type EmbeddingRequest struct {
@@ -91,11 +82,33 @@ type EmbeddingDataResponse struct {
 }
 
 type Similarity struct {
-	Prompt           string
-	CosineSimilarity float64
+	Prompt string
+	Score  float64
 }
 
-func getEmbeddingFromChunk(client *http.Client, doc string, url string, apiKey string, model string) ([]float64, error) {
+func getEmbeddingFromChunk(client *http.Client, doc string, name string, url string, apiKey string, model string, useCache bool) ([]float64, error) {
+	model = "granite3.1-moe:1b"
+	if useCache {
+		modelDir := fmt.Sprintf("%s/%s", embeddingsCacheDir, model)
+		if _, err := os.Stat(modelDir); os.IsNotExist(err) {
+			err := os.MkdirAll(modelDir, 0755)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		f, err := os.ReadFile(fmt.Sprintf("%s/%s/%s", embeddingsCacheDir, model, name))
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		} else if err == nil {
+			var response EmbeddingResponse
+			if err := json.Unmarshal(f, &response); err != nil {
+				return nil, err
+			}
+			return response.Data[0].Embedding, nil
+		}
+	}
+
 	request := EmbeddingRequest{
 		Prompt: doc,
 		Model:  model,
@@ -105,9 +118,9 @@ func getEmbeddingFromChunk(client *http.Client, doc string, url string, apiKey s
 	if err != nil {
 		return nil, err
 	}
-	url = strings.TrimRight(url, "/") + embeddingsEndpoint
+	url = strings.TrimRight("http://127.0.0.1:11434", "/") + embeddingsEndpoint
 
-	body, err := iclient.Post(client, requestBody, url, apiKey)
+	body, err := iclient.Post(client, requestBody, url, "")
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +129,51 @@ func getEmbeddingFromChunk(client *http.Client, doc string, url string, apiKey s
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
+	if useCache {
+		err = os.WriteFile(fmt.Sprintf("%s/%s/%s", embeddingsCacheDir, model, name), body, 0644)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return response.Data[0].Embedding, nil
+}
+
+// Add BM25 scoring for keyword matching
+func calculateBM25Score(query string, chunk string) float64 {
+	// Constants for BM25
+	const k1 = 1.2
+	const b = 0.75
+	const avgDocLength = 500.0
+
+	// Tokenize query and document
+	queryTerms := strings.Fields(strings.ToLower(query))
+	docTerms := strings.Fields(strings.ToLower(chunk))
+
+	docLength := float32(len(docTerms))
+
+	// Count term frequencies
+	termFreq := make(map[string]int)
+	for _, term := range docTerms {
+		termFreq[term]++
+	}
+
+	// Calculate BM25 score
+	var score float64
+	for _, term := range queryTerms {
+		if freq, exists := termFreq[term]; exists {
+			// Calculate IDF - in a real implementation, this would use corpus statistics
+			// Here we use a simplified approach
+			idf := float32(1.0) // Simplified IDF
+
+			// BM25 term scoring formula
+			numerator := float32(freq) * (k1 + 1)
+			denominator := float32(freq) + k1*(1-b+b*(docLength/avgDocLength))
+			score += float64(idf * (numerator / denominator))
+		}
+	}
+
+	return score
 }
 
 func cosineSimilarity(vec1, vec2 []float64) (float64, error) {
@@ -143,4 +199,5 @@ func cosineSimilarity(vec1, vec2 []float64) (float64, error) {
 	}
 
 	return dotProduct / (magnitude1 * magnitude2), nil
+
 }

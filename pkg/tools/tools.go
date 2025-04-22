@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/spf13/pflag"
+	"os"
+	"os/exec"
 	"strings"
 
 	"k8s.io/cli-runtime/pkg/genericiooptions"
@@ -67,8 +69,8 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 		tool := ToolCall{
 			Type: "function",
 			Function: ToolFunction{
-				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
-				Description: fmt.Sprintf("%s\n%s\n", cmd.Short, cmd.Use),
+				Name:        fmt.Sprintf("kubectl %s", cmd.Name()),
+				Description: fmt.Sprintf("%s\n%s\n", cmd.Long, cmd.Example),
 				Parameters:  make(map[string]interface{}),
 			},
 		}
@@ -110,8 +112,8 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 		tool := ToolCall{
 			Type: "function",
 			Function: ToolFunction{
-				Name:        fmt.Sprintf("kubectl__%s", cmd.Name()),
-				Description: fmt.Sprintf("%s\n%s\n", cmd.Short, cmd.Use),
+				Name:        fmt.Sprintf("kubectl %s", cmd.Name()),
+				Description: fmt.Sprintf("%s\n%s\n", cmd.Long, cmd.Example),
 				Parameters:  make(map[string]interface{}),
 			},
 		}
@@ -149,7 +151,7 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 }
 
 func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
-	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl__", "")
+	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl", "")
 	params := make(map[string]any)
 	json.Unmarshal([]byte(t.Function.Arguments), &params)
 	var resourceType, resourceName string
@@ -187,7 +189,18 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		}
 
 		if strings.EqualFold(input, "y") {
-			cmd.Run(cmd, args)
+			final := append([]string{cmd.Name()}, args...)
+			execution := exec.Command("kubectl", final...)
+
+			// Set the output to stdout and stderr
+			execution.Stdout = os.Stdout
+			execution.Stderr = os.Stderr
+
+			// Run the command
+			if err := execution.Run(); err != nil {
+				fmt.Println("Error:", err)
+			}
+			//cmd.Run(cmd, args)
 		}
 	}
 	return "", nil

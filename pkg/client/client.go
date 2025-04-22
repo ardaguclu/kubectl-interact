@@ -61,7 +61,7 @@ func GetClient(caCert string) (*http.Client, error) {
 	}
 
 	return &http.Client{
-		Timeout:   time.Minute,
+		Timeout:   5 * time.Minute,
 		Transport: transport,
 	}, nil
 }

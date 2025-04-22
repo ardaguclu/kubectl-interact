@@ -148,14 +148,18 @@ func (o *InteractOptions) Generate() error {
 			break
 		}
 
+		if userInput == "" {
+			continue
+		}
+
+		var command string
 		if o.useRAG {
-			commands, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
+			c, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
 			if err != nil {
 				fmt.Fprintf(o.ErrOut, "\nunexpected error during RAG search %v\n", err)
 				continue
 			}
-			// TODO: embed this to the messages of system prompt
-			fmt.Fprintf(o.Out, "\ncommands: %v\n", commands)
+			command = c
 		}
 
 		var messages []tools.Message
@@ -164,12 +168,18 @@ func (o *InteractOptions) Generate() error {
 			Content: userInput,
 		}, tools.Message{
 			Role: "system",
-			Content: `
+			Content: fmt.Sprintf(`
 You are a helpful AI assistant with access to the following tools. When a tool is required to answer the user's query, respond with <|tool_call|> followed by a JSON list of tools used. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.
 
 Always try to add resource names in resource_name, resource types in resource_type.
 Always add namespace. If it is not mentioned, it is default namespace. If it is mentioned all namespaces, it is all-namespaces=true.
-`,
+
+GUIDELINES:
+
+Convert these kubectl command examples to <|tool_call|> according to the user prompt
+
+%s
+`, command),
 		})
 
 		chatRequest := tools.ChatRequest{
