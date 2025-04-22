@@ -170,7 +170,15 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		}
 		cmd.InheritedFlags()
 
-		args = append([]string{resourceType, resourceName}, args...)
+		var prepend []string
+		if resourceType != "" {
+			prepend = append(prepend, resourceType)
+		}
+		if resourceName != "" {
+			prepend = append(prepend, resourceName)
+		}
+		// TODO: detect flags and set in here, do not pass in args.
+		args = append(prepend, args...)
 		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s (Do you want to execute, y/n):", cmd.Name(), strings.Join(args, " ")))
 		var input string
 		_, err := fmt.Fscan(streams.In, &input)
