@@ -2,18 +2,14 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"io"
+	"github.com/ardaguclu/kubectl-interact/pkg/client"
+	"github.com/ardaguclu/kubectl-interact/pkg/rag"
+	"github.com/spf13/cobra"
 	"net/http"
 	"os"
 	"strings"
-	"time"
-
-	"github.com/spf13/cobra"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
@@ -36,6 +32,7 @@ const (
 
 type InteractOptions struct {
 	configFlags *genericclioptions.ConfigFlags
+	client      *http.Client
 	f           util.Factory
 
 	ollama   bool
@@ -99,6 +96,11 @@ func (o *InteractOptions) Complete() error {
 	if strings.Contains(o.modelAPI, "localhost") || strings.Contains(o.modelAPI, "127.0.0.1") {
 		o.ollama = true
 	}
+	client, err := client.GetClient(o.caCert)
+	if err != nil {
+		return err
+	}
+	o.client = client
 	return nil
 }
 
@@ -133,11 +135,6 @@ func (o *InteractOptions) Generate() error {
 	fmt.Println("========================================")
 
 	scanner := bufio.NewScanner(o.In)
-	client, err := o.getClient()
-	if err != nil {
-		return err
-	}
-
 	for {
 		fmt.Print("\nYou: ")
 		if !scanner.Scan() {
@@ -148,6 +145,14 @@ func (o *InteractOptions) Generate() error {
 		if userInput == "exit" || userInput == "quit" {
 			break
 		}
+
+		commands, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
+		if err != nil {
+			fmt.Fprintf(o.ErrOut, "\nunexpected error during RAG search %v\n", err)
+			continue
+		}
+		fmt.Fprintf(o.Out, "\ncommands: %v\n", commands)
+
 		var messages []tools.Message
 		messages = append(messages, tools.Message{
 			Role:    "user",
@@ -162,7 +167,7 @@ You are a helpful AI assistant with access to the following tools. When a tool i
 		chatRequest := tools.ChatRequest{
 			Model:       o.modelID,
 			Messages:    messages,
-			Temperature: 0,
+			Temperature: 0.2,
 		}
 
 		if o.ollama {
@@ -177,30 +182,9 @@ You are a helpful AI assistant with access to the following tools. When a tool i
 			continue
 		}
 
-		req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
-		if err != nil {
-			fmt.Fprintf(o.ErrOut, "\nError creating request: %v\n", err)
-			continue
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+o.apiKey)
-
-		resp, err := client.Do(req)
+		body, err := client.Post(o.client, requestBody, url, o.apiKey)
 		if err != nil {
 			fmt.Fprintf(o.ErrOut, "\nError sending request: %v\n", err)
-			continue
-		}
-
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			fmt.Fprintf(o.ErrOut, "\nError reading response: %v\n", err)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			fmt.Fprintf(o.ErrOut, "\nError: received status code %d: %s\n", resp.StatusCode, body)
 			continue
 		}
 
@@ -234,33 +218,4 @@ You are a helpful AI assistant with access to the following tools. When a tool i
 		}
 	}
 	return nil
-}
-
-func (o *InteractOptions) getClient() (*http.Client, error) {
-	transport := &http.Transport{}
-	if o.caCert != "" {
-		ca, err := os.ReadFile(o.caCert)
-		if err != nil {
-			return nil, fmt.Errorf("unable to read CA cert: %w", err)
-		}
-
-		caCertPool, err := x509.SystemCertPool()
-		if err != nil || caCertPool == nil {
-			caCertPool = x509.NewCertPool()
-		}
-		caCertPool.AppendCertsFromPEM(ca)
-
-		tlsConfig := &tls.Config{
-			RootCAs: caCertPool,
-		}
-
-		transport = &http.Transport{
-			TLSClientConfig: tlsConfig,
-		}
-	}
-
-	return &http.Client{
-		Timeout:   time.Minute,
-		Transport: transport,
-	}, nil
 }
