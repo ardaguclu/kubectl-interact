@@ -166,6 +166,9 @@ func (o *InteractOptions) Generate() error {
 			Role: "system",
 			Content: `
 You are a helpful AI assistant with access to the following tools. When a tool is required to answer the user's query, respond with <|tool_call|> followed by a JSON list of tools used. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.
+
+Always try to add resource names in resource_name, resource types in resource_type.
+Always add namespace. If it is not mentioned, it is default namespace. If it is mentioned all namespaces, it is all-namespaces=true.
 `,
 		})
 

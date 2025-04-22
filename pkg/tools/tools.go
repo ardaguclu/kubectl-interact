@@ -3,10 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
-	"unicode"
-
 	"github.com/spf13/pflag"
+	"strings"
 
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/kubectl/pkg/cmd"
@@ -85,6 +83,21 @@ func GenerateKubectlCommandsAsTool() []ToolCall {
 			}
 		})
 
+		tool.Function.Parameters["resource_name"] = struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}{
+			Type:        "string",
+			Description: "Name of a specific resource instance",
+		}
+		tool.Function.Parameters["resource_type"] = struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}{
+			Type:        "string",
+			Description: "Kubernetes resource type (e.g. pod, deployment, service)",
+		}
+
 		tools = append(tools, tool)
 	}
 	return tools
@@ -115,6 +128,20 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 				Description: flag.Usage,
 			}
 		})
+		tool.Function.Parameters["properties"].(map[string]any)["resource_name"] = struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}{
+			Type:        "string",
+			Description: "Name of a specific resource instance",
+		}
+		tool.Function.Parameters["properties"].(map[string]any)["resource_type"] = struct {
+			Type        string `json:"type"`
+			Description string `json:"description"`
+		}{
+			Type:        "string",
+			Description: "Kubernetes resource type (e.g. pod, deployment, service)",
+		}
 
 		tools = append(tools, tool)
 	}
@@ -123,15 +150,17 @@ func GenerateKubectlCommandsAsToolOllama() []ToolCall {
 
 func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (string, error) {
 	cmdName := strings.ReplaceAll(t.Function.Name, "kubectl__", "")
-	params := make(map[string]map[string]string)
+	params := make(map[string]any)
 	json.Unmarshal([]byte(t.Function.Arguments), &params)
-	arguments := params["arguments"]
+	var resourceType, resourceName string
 	var args []string
-	for key, val := range arguments {
-		if isAllUpper(key) {
-			args = append(args, val)
+	for key, val := range params {
+		if key == "resource_type" {
+			resourceType, _ = val.(string)
+		} else if key == "resource_name" {
+			resourceName, _ = val.(string)
 		} else {
-			args = append(args, fmt.Sprintf("--%s=%s", key, val))
+			args = append(args, fmt.Sprintf("--%s=%v", key, val))
 		}
 	}
 	kubectl := cmd.NewDefaultKubectlCommand()
@@ -141,6 +170,7 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		}
 		cmd.InheritedFlags()
 
+		args = append([]string{resourceType, resourceName}, args...)
 		fmt.Fprintf(streams.Out, fmt.Sprintf("kubectl %s %s (Do you want to execute, y/n):", cmd.Name(), strings.Join(args, " ")))
 		var input string
 		_, err := fmt.Fscan(streams.In, &input)
@@ -153,17 +183,4 @@ func ExecuteCommand(t ToolCallResponse, streams genericiooptions.IOStreams) (str
 		}
 	}
 	return "", nil
-}
-
-func isAllUpper(s string) bool {
-	hasLetter := false
-	for _, r := range s {
-		if unicode.IsLetter(r) {
-			hasLetter = true
-			if !unicode.IsUpper(r) {
-				return false
-			}
-		}
-	}
-	return hasLetter
 }
