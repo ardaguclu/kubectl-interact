@@ -128,7 +128,6 @@ func (o *InteractOptions) Generate() error {
 	} else {
 		url = url + completionEndpoint
 	}
-	var messages []tools.Message
 
 	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")
 	fmt.Println("========================================")
@@ -149,18 +148,15 @@ func (o *InteractOptions) Generate() error {
 		if userInput == "exit" || userInput == "quit" {
 			break
 		}
-
+		var messages []tools.Message
 		messages = append(messages, tools.Message{
 			Role:    "user",
 			Content: userInput,
 		}, tools.Message{
 			Role: "system",
 			Content: `
-You are a helpful assistant with access to the following function calls. 
-Your task is to produce a list of function calls necessary to generate response to the user utterance.
-Use tools only if it is required. 
-Execute as many tools as required to find out correct answer.
-Use the following function calls as required.`,
+You are a helpful AI assistant with access to the following tools. When a tool is required to answer the user's query, respond with <|tool_call|> followed by a JSON list of tools used. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.
+`,
 		})
 
 		chatRequest := tools.ChatRequest{
