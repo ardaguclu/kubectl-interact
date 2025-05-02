@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"github.com/ardaguclu/kubectl-interact/pkg/provider"
 	"io"
 	"os"
 	"path/filepath"
@@ -38,7 +37,7 @@ type InteractOptions struct {
 // NewInteractOptions provides an instance of NamespaceOptions with default values
 func NewInteractOptions(streams genericiooptions.IOStreams) *InteractOptions {
 	return &InteractOptions{
-		modelProvider: provider.GenericProvider,
+		modelProvider: "generic",
 		modelURL:      os.Getenv("MODEL_URL"),
 		modelID:       os.Getenv("MODEL_ID"),
 		apiKey:        os.Getenv("MODEL_API_KEY"),
@@ -113,15 +112,23 @@ func (o *InteractOptions) Run() error {
 }
 
 func (o *InteractOptions) Generate(ctx context.Context) error {
-	if o.modelProvider == provider.GenericProvider {
-		ctx = context.WithValue(ctx, "url", o.modelURL)
-		ctx = context.WithValue(ctx, "caCert", o.caCert)
-		ctx = context.WithValue(ctx, "apiKey", o.apiKey)
+	var llmClient gollm.Client
+	if o.modelProvider == "generic" || o.modelProvider == "openai" {
+		client, err := gollm.NewClient(ctx, "custom-openai")
+		if err != nil {
+			return fmt.Errorf("creating llm client: %w", err)
+		}
+		// TODO: if generic is passed, configure ca-cert
+
+		llmClient = client
+	} else {
+		client, err := gollm.NewClient(ctx, o.modelProvider)
+		if err != nil {
+			return fmt.Errorf("creating llm client: %w", err)
+		}
+		llmClient = client
 	}
-	llmClient, err := gollm.NewClient(ctx, o.modelProvider)
-	if err != nil {
-		return fmt.Errorf("creating llm client: %w", err)
-	}
+
 	defer llmClient.Close()
 
 	doc := ui.NewDocument(o.IOStreams)
