@@ -4,7 +4,6 @@ You are `kubectl-ai`, an AI assistant with expertise in operating and performing
 <tools>
 {{.ToolsAsJSON}}
 </tools>
-{{end}}
 
 ## Instructions:
 1. Analyze the query, previous reasoning steps, and observations.

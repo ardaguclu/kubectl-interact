@@ -14,6 +14,8 @@
 
 package ui
 
+import "k8s.io/cli-runtime/pkg/genericiooptions"
+
 // AgentTextBlock is used to render agent textual responses
 type AgentTextBlock struct {
 	doc *Document
@@ -48,27 +50,27 @@ func (b *AgentTextBlock) Streaming() bool {
 	return b.streaming
 }
 
-func (b *AgentTextBlock) SetStreaming(streaming bool) *AgentTextBlock {
+func (b *AgentTextBlock) SetStreaming(streaming bool, streams genericiooptions.IOStreams) *AgentTextBlock {
 	b.streaming = streaming
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 
-func (b *AgentTextBlock) SetColor(color ColorValue) *AgentTextBlock {
+func (b *AgentTextBlock) SetColor(color ColorValue, streams genericiooptions.IOStreams) *AgentTextBlock {
 	b.Color = color
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 
-func (b *AgentTextBlock) SetText(agentText string) *AgentTextBlock {
+func (b *AgentTextBlock) SetText(agentText string, streams genericiooptions.IOStreams) *AgentTextBlock {
 	b.text = agentText
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 
-func (b *AgentTextBlock) AppendText(text string) *AgentTextBlock {
+func (b *AgentTextBlock) AppendText(text string, streams genericiooptions.IOStreams) *AgentTextBlock {
 	b.text = b.text + text
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 
@@ -96,9 +98,9 @@ func (b *FunctionCallRequestBlock) Text() string {
 	return b.text
 }
 
-func (b *FunctionCallRequestBlock) SetText(agentText string) *FunctionCallRequestBlock {
+func (b *FunctionCallRequestBlock) SetText(agentText string, streams genericiooptions.IOStreams) *FunctionCallRequestBlock {
 	b.text = agentText
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 
@@ -126,9 +128,9 @@ func (b *ErrorBlock) Text() string {
 	return b.text
 }
 
-func (b *ErrorBlock) SetText(agentText string) *ErrorBlock {
+func (b *ErrorBlock) SetText(agentText string, streams genericiooptions.IOStreams) *ErrorBlock {
 	b.text = agentText
-	b.doc.blockChanged(b)
+	b.doc.blockChanged(b, streams)
 	return b
 }
 

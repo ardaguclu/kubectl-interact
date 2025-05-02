@@ -108,7 +108,7 @@ func (d *Document) AddSubscription(subscriber Subscriber) io.Closer {
 	return s
 }
 
-func (d *Document) sendDocumentChanged(b Block) {
+func (d *Document) sendDocumentChanged(b Block, streams genericiooptions.IOStreams) {
 	d.mutex.Lock()
 	subscriptions := d.subscriptions
 	d.mutex.Unlock()
@@ -118,11 +118,11 @@ func (d *Document) sendDocumentChanged(b Block) {
 			continue
 		}
 
-		s.subscriber.DocumentChanged(d, b)
+		s.subscriber.DocumentChanged(d, b, streams)
 	}
 }
 
-func (d *Document) AddBlock(block Block) {
+func (d *Document) AddBlock(block Block, streams genericiooptions.IOStreams) {
 	d.mutex.Lock()
 
 	// Copy-on-write to minimize locking
@@ -134,13 +134,13 @@ func (d *Document) AddBlock(block Block) {
 
 	d.mutex.Unlock()
 
-	d.sendDocumentChanged(block)
+	d.sendDocumentChanged(block, streams)
 }
 
-func (d *Document) blockChanged(block Block) {
+func (d *Document) blockChanged(block Block, streams genericiooptions.IOStreams) {
 	if d == nil {
 		return
 	}
 
-	d.sendDocumentChanged(block)
+	d.sendDocumentChanged(block, streams)
 }

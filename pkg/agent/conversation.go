@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"os"
 	"sort"
 	"strings"
@@ -52,19 +53,16 @@ type Conversation struct {
 	llmChat gollm.Chat
 
 	workDir string
+
+	streams genericiooptions.IOStreams
 }
 
-func (s *Conversation) Init(ctx context.Context, doc *ui.Document) error {
-	log := klog.FromContext(ctx)
-
+func (s *Conversation) Init(ctx context.Context, doc *ui.Document, streams genericiooptions.IOStreams) error {
 	// Create a temporary working directory
 	workDir, err := os.MkdirTemp("", "agent-workdir-*")
 	if err != nil {
-		log.Error(err, "Failed to create temporary working directory")
 		return err
 	}
-
-	log.Info("Created temporary working directory", "workDir", workDir)
 
 	systemPrompt, err := s.generatePrompt(ctx, PromptData{
 		Tools: s.Tools,
@@ -97,6 +95,7 @@ func (s *Conversation) Init(ctx context.Context, doc *ui.Document) error {
 		return fmt.Errorf("setting function definitions: %w", err)
 	}
 
+	s.streams = streams
 	s.workDir = workDir
 	s.doc = doc
 
@@ -161,10 +160,10 @@ func (c *Conversation) RunOneRound(ctx context.Context, query string) error {
 				if text, ok := part.AsText(); ok {
 					if agentTextBlock == nil {
 						agentTextBlock = ui.NewAgentTextBlock()
-						agentTextBlock.SetStreaming(true)
-						c.doc.AddBlock(agentTextBlock)
+						agentTextBlock.SetStreaming(true, c.streams)
+						c.doc.AddBlock(agentTextBlock, c.streams)
 					}
-					agentTextBlock.AppendText(text)
+					agentTextBlock.AppendText(text, c.streams)
 				}
 
 				// Check if it's a function call
@@ -175,7 +174,7 @@ func (c *Conversation) RunOneRound(ctx context.Context, query string) error {
 		}
 
 		if agentTextBlock != nil {
-			agentTextBlock.SetStreaming(false)
+			agentTextBlock.SetStreaming(false, c.streams)
 		}
 
 		// TODO(droot): Run all function calls in parallel
@@ -187,14 +186,14 @@ func (c *Conversation) RunOneRound(ctx context.Context, query string) error {
 			}
 
 			s := toolCall.PrettyPrint()
-			c.doc.AddBlock(ui.NewFunctionCallRequestBlock().SetText(fmt.Sprintf("  Running: %s\n", s)))
+			c.doc.AddBlock(ui.NewFunctionCallRequestBlock().SetText(fmt.Sprintf("  Running: %s\n", s), c.streams), c.streams)
 			confirmationPrompt := `  Do you want to proceed ?
   1) Yes
   2) No`
 
 			optionsBlock := ui.NewInputOptionBlock().SetPrompt(confirmationPrompt)
 			optionsBlock.SetOptions([]string{"1", "2"})
-			c.doc.AddBlock(optionsBlock)
+			c.doc.AddBlock(optionsBlock, c.streams)
 
 			selectedChoice, err := optionsBlock.Observable().Wait()
 			if err != nil {
@@ -210,14 +209,14 @@ func (c *Conversation) RunOneRound(ctx context.Context, query string) error {
 			case "1":
 				// Proceed with the operation
 			case "2":
-				c.doc.AddBlock(ui.NewAgentTextBlock().SetText("Operation was skipped."))
+				c.doc.AddBlock(ui.NewAgentTextBlock().SetText("Operation was skipped.", c.streams), c.streams)
 				observation := fmt.Sprintf("User didn't approve running %q.\n", call.Name)
 				currChatContent = append(currChatContent, observation)
 				continue
 			default:
 				// This case should technically not be reachable due to AskForConfirmation loop
 				err := fmt.Errorf("invalid confirmation choice: %q", selectedChoice)
-				c.doc.AddBlock(ui.NewErrorBlock().SetText("Invalid choice received. Cancelling operation."))
+				c.doc.AddBlock(ui.NewErrorBlock().SetText("Invalid choice received. Cancelling operation.", c.streams), c.streams)
 				return err
 			}
 
@@ -242,8 +241,8 @@ func (c *Conversation) RunOneRound(ctx context.Context, query string) error {
 	}
 
 	// If we've reached the maximum number of iterations
-	errorBlock := ui.NewErrorBlock().SetText(fmt.Sprintf("Sorry, couldn't complete the task after %d iterations.\n", maxIterations))
-	c.doc.AddBlock(errorBlock)
+	errorBlock := ui.NewErrorBlock().SetText(fmt.Sprintf("Sorry, couldn't complete the task after %d iterations.\n", maxIterations, c.streams), c.streams)
+	c.doc.AddBlock(errorBlock, c.streams)
 	return fmt.Errorf("max iterations reached")
 }
 

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"github.com/ardaguclu/kubectl-interact/pkg/provider"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,11 +25,12 @@ var (
 )
 
 type InteractOptions struct {
-	kubeConfig string
-	modelAPI   string
-	modelID    string
-	apiKey     string
-	caCert     string
+	kubeConfig    string
+	modelProvider string
+	modelURL      string
+	modelID       string
+	apiKey        string
+	caCert        string
 
 	genericiooptions.IOStreams
 }
@@ -36,10 +38,11 @@ type InteractOptions struct {
 // NewInteractOptions provides an instance of NamespaceOptions with default values
 func NewInteractOptions(streams genericiooptions.IOStreams) *InteractOptions {
 	return &InteractOptions{
-		modelAPI:  os.Getenv("MODEL_API"),
-		modelID:   os.Getenv("MODEL_ID"),
-		apiKey:    os.Getenv("MODEL_API_KEY"),
-		IOStreams: streams,
+		modelProvider: provider.GenericProvider,
+		modelURL:      os.Getenv("MODEL_URL"),
+		modelID:       os.Getenv("MODEL_ID"),
+		apiKey:        os.Getenv("MODEL_API_KEY"),
+		IOStreams:     streams,
 	}
 }
 
@@ -69,7 +72,8 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&o.modelAPI, "model-api", o.modelAPI, "URL of the model API")
+	cmd.Flags().StringVar(&o.modelProvider, "model-provider", o.modelProvider, "The model provider to use, defaults to generic provider")
+	cmd.Flags().StringVar(&o.modelURL, "model-url", o.modelURL, "URL of the model API. This is ignored if model-provider is other than generic")
 	cmd.Flags().StringVar(&o.modelID, "model-id", o.modelID, "ID of the model")
 	cmd.Flags().StringVar(&o.apiKey, "api-key", o.apiKey, "API Key of the model API")
 	cmd.Flags().StringVar(&o.caCert, "ca-cert", o.caCert, "CA Cert path for the model API")
@@ -109,7 +113,12 @@ func (o *InteractOptions) Run() error {
 }
 
 func (o *InteractOptions) Generate(ctx context.Context) error {
-	llmClient, err := gollm.NewClient(context.TODO(), "")
+	if o.modelProvider == provider.GenericProvider {
+		ctx = context.WithValue(ctx, "url", o.modelURL)
+		ctx = context.WithValue(ctx, "caCert", o.caCert)
+		ctx = context.WithValue(ctx, "apiKey", o.apiKey)
+	}
+	llmClient, err := gollm.NewClient(ctx, o.modelProvider)
 	if err != nil {
 		return fmt.Errorf("creating llm client: %w", err)
 	}
@@ -129,7 +138,7 @@ func (o *InteractOptions) Generate(ctx context.Context) error {
 		Tools:      tools.Default(),
 	}
 
-	err = conversation.Init(ctx, doc)
+	err = conversation.Init(ctx, doc, o.IOStreams)
 	if err != nil {
 		return fmt.Errorf("starting conversation: %w", err)
 	}
@@ -141,6 +150,7 @@ func (o *InteractOptions) Generate(ctx context.Context) error {
 		ui:           u,
 		conversation: conversation,
 		LLM:          llmClient,
+		streams:      o.IOStreams,
 	}
 
 	return chatSession.repl(ctx)
@@ -154,16 +164,17 @@ type session struct {
 	conversation    *agent.Conversation
 	availableModels []string
 	LLM             gollm.Client
+	streams         genericiooptions.IOStreams
 }
 
 // repl is a read-eval-print loop for the chat session.
 func (s *session) repl(ctx context.Context) error {
 	query := "Hey there, what can I help you with today?"
-	s.doc.AddBlock(ui.NewAgentTextBlock().SetText(query))
+	s.doc.AddBlock(ui.NewAgentTextBlock().SetText(query, s.streams), s.streams)
 	for {
 		if query == "" {
 			input := ui.NewInputTextBlock()
-			s.doc.AddBlock(input)
+			s.doc.AddBlock(input, s.streams)
 
 			userInput, err := input.Observable().Wait()
 			if err != nil {
@@ -181,7 +192,7 @@ func (s *session) repl(ctx context.Context) error {
 		case query == "":
 			continue
 		case query == "reset":
-			err := s.conversation.Init(ctx, s.doc)
+			err := s.conversation.Init(ctx, s.doc, s.streams)
 			if err != nil {
 				return err
 			}
@@ -193,8 +204,8 @@ func (s *session) repl(ctx context.Context) error {
 		default:
 			if err := s.answerQuery(ctx, query); err != nil {
 				errorBlock := &ui.ErrorBlock{}
-				errorBlock.SetText(fmt.Sprintf("Error: %v\n", err))
-				s.doc.AddBlock(errorBlock)
+				errorBlock.SetText(fmt.Sprintf("Error: %v\n", err), s.streams)
+				s.doc.AddBlock(errorBlock, s.streams)
 			}
 		}
 		// Reset query to empty string so that we prompt for input again
@@ -217,8 +228,8 @@ func (s *session) answerQuery(ctx context.Context, query string) error {
 	switch {
 	case query == "model":
 		infoBlock := &ui.AgentTextBlock{}
-		infoBlock.AppendText(fmt.Sprintf("Current model is `%s`\n", s.model))
-		s.doc.AddBlock(infoBlock)
+		infoBlock.AppendText(fmt.Sprintf("Current model is `%s`\n", s.model), s.streams)
+		s.doc.AddBlock(infoBlock, s.streams)
 
 	case query == "models":
 		models, err := s.listModels(ctx)
@@ -226,9 +237,9 @@ func (s *session) answerQuery(ctx context.Context, query string) error {
 			return fmt.Errorf("listing models: %w", err)
 		}
 		infoBlock := &ui.AgentTextBlock{}
-		infoBlock.AppendText("\n  Available models:\n")
-		infoBlock.AppendText(strings.Join(models, "\n"))
-		s.doc.AddBlock(infoBlock)
+		infoBlock.AppendText("\n  Available models:\n", s.streams)
+		infoBlock.AppendText(strings.Join(models, "\n"), s.streams)
+		s.doc.AddBlock(infoBlock, s.streams)
 
 	default:
 		return s.conversation.RunOneRound(ctx, query)
