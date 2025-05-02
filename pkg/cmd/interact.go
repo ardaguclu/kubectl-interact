@@ -1,21 +1,19 @@
 package cmd
 
 import (
-	"bufio"
-	"encoding/json"
+	"context"
 	"fmt"
-	"github.com/ardaguclu/kubectl-interact/pkg/client"
-	"github.com/ardaguclu/kubectl-interact/pkg/rag"
-	"github.com/spf13/cobra"
-	"net/http"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"k8s.io/cli-runtime/pkg/genericclioptions"
-	"k8s.io/cli-runtime/pkg/genericiooptions"
-	"k8s.io/kubectl/pkg/cmd/util"
-
+	"github.com/GoogleCloudPlatform/kubectl-ai/gollm"
+	"github.com/ardaguclu/kubectl-interact/pkg/agent"
 	"github.com/ardaguclu/kubectl-interact/pkg/tools"
+	"github.com/ardaguclu/kubectl-interact/pkg/ui"
+	"github.com/spf13/cobra"
+	"k8s.io/cli-runtime/pkg/genericiooptions"
 )
 
 var (
@@ -25,22 +23,12 @@ var (
 `
 )
 
-const (
-	completionEndpoint       = "/v1/chat/completions"
-	ollamaCompletionEndpoint = "/api/chat"
-)
-
 type InteractOptions struct {
-	configFlags *genericclioptions.ConfigFlags
-	client      *http.Client
-	f           util.Factory
-
-	ollama   bool
-	modelAPI string
-	modelID  string
-	apiKey   string
-	caCert   string
-	useRAG   bool
+	kubeConfig string
+	modelAPI   string
+	modelID    string
+	apiKey     string
+	caCert     string
 
 	genericiooptions.IOStreams
 }
@@ -48,18 +36,16 @@ type InteractOptions struct {
 // NewInteractOptions provides an instance of NamespaceOptions with default values
 func NewInteractOptions(streams genericiooptions.IOStreams) *InteractOptions {
 	return &InteractOptions{
-		configFlags: genericclioptions.NewConfigFlags(true),
-		modelAPI:    os.Getenv("MODEL_API"),
-		modelID:     os.Getenv("MODEL_ID"),
-		apiKey:      os.Getenv("MODEL_API_KEY"),
-		IOStreams:   streams,
+		modelAPI:  os.Getenv("MODEL_API"),
+		modelID:   os.Getenv("MODEL_ID"),
+		apiKey:    os.Getenv("MODEL_API_KEY"),
+		IOStreams: streams,
 	}
 }
 
 // NewCmdInteract provides a cobra command wrapping InteractOptions
 func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 	o := NewInteractOptions(streams)
-
 	cmd := &cobra.Command{
 		Use:          "interact",
 		Short:        "interact",
@@ -83,26 +69,30 @@ func NewCmdInteract(streams genericiooptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	o.configFlags.AddFlags(cmd.Flags())
 	cmd.Flags().StringVar(&o.modelAPI, "model-api", o.modelAPI, "URL of the model API")
 	cmd.Flags().StringVar(&o.modelID, "model-id", o.modelID, "ID of the model")
 	cmd.Flags().StringVar(&o.apiKey, "api-key", o.apiKey, "API Key of the model API")
 	cmd.Flags().StringVar(&o.caCert, "ca-cert", o.caCert, "CA Cert path for the model API")
-	cmd.Flags().BoolVar(&o.useRAG, "use-rag", o.useRAG, "Enable this if your model supports embeddings")
+	cmd.Flags().StringVar(&o.kubeConfig, "kubeconfig", "", "path to the kubeconfig file")
 	return cmd
 }
 
 func (o *InteractOptions) Complete() error {
-	o.f = util.NewFactory(o.configFlags)
+	kubeconfigPath := o.kubeConfig
+	if kubeconfigPath == "" {
+		// Check environment variable
+		kubeconfigPath = os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			// Use default path
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("error getting user home directory: %w", err)
+			}
+			kubeconfigPath = filepath.Join(homeDir, ".kube", "config")
+		}
+	}
+	o.kubeConfig = kubeconfigPath
 
-	if strings.Contains(o.modelAPI, "localhost") || strings.Contains(o.modelAPI, "127.0.0.1") {
-		o.ollama = true
-	}
-	client, err := client.GetClient(o.caCert)
-	if err != nil {
-		return err
-	}
-	o.client = client
 	return nil
 }
 
@@ -111,129 +101,137 @@ func (o *InteractOptions) Validate() error {
 }
 
 func (o *InteractOptions) Run() error {
-	err := o.Generate()
+	err := o.Generate(context.TODO())
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (o *InteractOptions) Generate() error {
-	fmt.Fprintf(o.Out, "model-api: %s\n", o.modelAPI)
-	fmt.Fprintf(o.Out, "model-id: %s\n", o.modelID)
+func (o *InteractOptions) Generate(ctx context.Context) error {
+	llmClient, err := gollm.NewClient(context.TODO(), "")
+	if err != nil {
+		return fmt.Errorf("creating llm client: %w", err)
+	}
+	defer llmClient.Close()
 
-	if o.modelAPI == "" || o.modelID == "" {
-		return fmt.Errorf("please provide a valid api or model")
+	doc := ui.NewDocument(o.IOStreams)
+
+	u, err := ui.NewTerminalUI(doc)
+	if err != nil {
+		return err
 	}
 
-	url := strings.TrimRight(o.modelAPI, "/")
-	if o.ollama {
-		url = url + ollamaCompletionEndpoint
-	} else {
-		url = url + completionEndpoint
+	conversation := &agent.Conversation{
+		Model:      o.modelID,
+		Kubeconfig: o.kubeConfig,
+		LLM:        llmClient,
+		Tools:      tools.Default(),
 	}
 
-	fmt.Println("Kubectl Chatbot (type 'exit' to quit)")
-	fmt.Println("========================================")
+	err = conversation.Init(ctx, doc)
+	if err != nil {
+		return fmt.Errorf("starting conversation: %w", err)
+	}
+	defer conversation.Close()
 
-	scanner := bufio.NewScanner(o.In)
+	chatSession := session{
+		model:        o.modelID,
+		doc:          doc,
+		ui:           u,
+		conversation: conversation,
+		LLM:          llmClient,
+	}
+
+	return chatSession.repl(ctx)
+}
+
+// session represents the user chat session (interactive/non-interactive both)
+type session struct {
+	model           string
+	ui              ui.UI
+	doc             *ui.Document
+	conversation    *agent.Conversation
+	availableModels []string
+	LLM             gollm.Client
+}
+
+// repl is a read-eval-print loop for the chat session.
+func (s *session) repl(ctx context.Context) error {
+	query := "Hey there, what can I help you with today?"
+	s.doc.AddBlock(ui.NewAgentTextBlock().SetText(query))
 	for {
-		fmt.Print("\nYou: ")
-		if !scanner.Scan() {
-			break
-		}
+		if query == "" {
+			input := ui.NewInputTextBlock()
+			s.doc.AddBlock(input)
 
-		userInput := strings.TrimSpace(scanner.Text())
-		if userInput == "exit" || userInput == "quit" {
-			break
-		}
-
-		if userInput == "" {
-			continue
-		}
-
-		var command string
-		if o.useRAG {
-			c, err := rag.SearchCommands(o.client, userInput, o.modelAPI, o.apiKey, o.modelID)
+			userInput, err := input.Observable().Wait()
 			if err != nil {
-				fmt.Fprintf(o.ErrOut, "\nunexpected error during RAG search %v\n", err)
-				continue
+				if err == io.EOF {
+					// Use hit control-D, or was piping and we reached the end of stdin.
+					// Not a "big" problem
+					return nil
+				}
+				return fmt.Errorf("reading input: %w", err)
 			}
-			command = c
+			query = strings.TrimSpace(userInput)
 		}
 
-		var messages []tools.Message
-		messages = append(messages, tools.Message{
-			Role:    "user",
-			Content: userInput,
-		}, tools.Message{
-			Role: "system",
-			Content: fmt.Sprintf(`
-You are a helpful AI assistant with access to the following tools. When a tool is required to answer the user's query, respond with <|tool_call|> followed by a JSON list of tools used. If a tool does not exist in the provided list of tools, notify the user that you do not have the ability to fulfill the request.
-
-Always try to add resource names in resource_name, resource types in resource_type.
-Always add namespace. If it is not mentioned, it is default namespace. If it is mentioned all namespaces, it is all-namespaces=true.
-
-GUIDELINES:
-
-Convert these kubectl command examples to <|tool_call|> according to the user prompt
-
-%s
-`, command),
-		})
-
-		chatRequest := tools.ChatRequest{
-			Model:       o.modelID,
-			Messages:    messages,
-			Temperature: 0.2,
-		}
-
-		if o.ollama {
-			chatRequest.Tools = tools.GenerateKubectlCommandsAsToolOllama()
-		} else {
-			chatRequest.Tools = tools.GenerateKubectlCommandsAsTool()
-		}
-
-		requestBody, err := json.Marshal(chatRequest)
-		if err != nil {
-			fmt.Fprintf(o.ErrOut, "\nError creating request: %v\n", err)
+		switch {
+		case query == "":
 			continue
-		}
-
-		body, err := client.Post(o.client, requestBody, url, o.apiKey)
-		if err != nil {
-			fmt.Fprintf(o.ErrOut, "\nError sending request: %v\n", err)
-			continue
-		}
-
-		var chatResponse tools.ChatResponse
-		if err := json.Unmarshal(body, &chatResponse); err != nil {
-			fmt.Fprintf(o.ErrOut, "\nError parsing response: %v\n", err)
-			continue
-		}
-
-		if len(chatResponse.Choices) == 0 {
-			fmt.Fprintf(o.ErrOut, "\nError: No choices returned in response")
-			continue
-		}
-
-		assistantMessage := chatResponse.Choices[0].Message
-		messages = append(messages, assistantMessage)
-
-		for _, toolCall := range assistantMessage.ToolCallResponses {
-			if cmd, err := tools.ExecuteCommand(toolCall, o.IOStreams); err != nil {
-				fmt.Fprintf(o.ErrOut, "\nError executing command: %v\n", err)
-				break
-			} else if cmd != "" {
-				messages = append(messages, tools.Message{
-					Role:    "user",
-					Content: cmd,
-				})
+		case query == "reset":
+			err := s.conversation.Init(ctx, s.doc)
+			if err != nil {
+				return err
+			}
+		case query == "clear":
+			s.ui.ClearScreen()
+		case query == "exit" || query == "quit":
+			// s.ui.RenderOutput(ctx, "Allright...bye.\n")
+			return nil
+		default:
+			if err := s.answerQuery(ctx, query); err != nil {
+				errorBlock := &ui.ErrorBlock{}
+				errorBlock.SetText(fmt.Sprintf("Error: %v\n", err))
+				s.doc.AddBlock(errorBlock)
 			}
 		}
-		if assistantMessage.Content != "" {
-			fmt.Fprintf(o.Out, "Assistant: %s\n", assistantMessage.Content)
+		// Reset query to empty string so that we prompt for input again
+		query = ""
+	}
+}
+
+func (s *session) listModels(ctx context.Context) ([]string, error) {
+	if s.availableModels == nil {
+		modelNames, err := s.LLM.ListModels(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing models: %w", err)
 		}
+		s.availableModels = modelNames
+	}
+	return s.availableModels, nil
+}
+
+func (s *session) answerQuery(ctx context.Context, query string) error {
+	switch {
+	case query == "model":
+		infoBlock := &ui.AgentTextBlock{}
+		infoBlock.AppendText(fmt.Sprintf("Current model is `%s`\n", s.model))
+		s.doc.AddBlock(infoBlock)
+
+	case query == "models":
+		models, err := s.listModels(ctx)
+		if err != nil {
+			return fmt.Errorf("listing models: %w", err)
+		}
+		infoBlock := &ui.AgentTextBlock{}
+		infoBlock.AppendText("\n  Available models:\n")
+		infoBlock.AppendText(strings.Join(models, "\n"))
+		s.doc.AddBlock(infoBlock)
+
+	default:
+		return s.conversation.RunOneRound(ctx, query)
 	}
 	return nil
 }
